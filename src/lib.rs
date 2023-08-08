@@ -140,7 +140,7 @@ pub struct OrderedCollection<T> {
     mask: usize,
 }
 
-impl<T: Ord> From<Vec<T>> for OrderedCollection<T> {
+impl<T: Ord + Default + Copy> From<Vec<T>> for OrderedCollection<T> {
     /// Construct a new `OrderedCollection` from a vector of elements.
     ///
     /// # Examples
@@ -170,7 +170,7 @@ where
     }
 
     // visit left child
-    eytzinger_walk(v, iter, 2 * i + 1);
+    eytzinger_walk(v, iter, 2 * i);
 
     // put data at the root
     // we know the get_unchecked_mut and unwrap below are safe because we set the Vec's capacity to
@@ -178,10 +178,10 @@ where
     *unsafe { v.get_unchecked_mut(i) } = iter.next().unwrap();
 
     // visit right child
-    eytzinger_walk(v, iter, 2 * i + 2);
+    eytzinger_walk(v, iter, 2 * i + 1);
 }
 
-impl<T: Ord> OrderedCollection<T> {
+impl<T: Ord + Default + Copy> OrderedCollection<T> {
     /// Construct a new `OrderedCollection` from an iterator over sorted elements.
     ///
     /// Note that if the iterator is *not* sorted, no error will be given, but lookups will give
@@ -226,8 +226,8 @@ impl<T: Ord> OrderedCollection<T> {
     /// s.insert(89);
     /// s.insert(7);
     /// s.insert(12);
-    /// let a = OrderedCollection::from_sorted_iter(s.iter());
-    /// assert_eq!(a.find_gte(50), Some(&&89));
+    /// let a = OrderedCollection::from_sorted_iter(s.into_iter());
+    /// assert_eq!(a.find_gte(50), Some(&89));
     /// ```
     ///
     pub fn from_sorted_iter<I>(iter: I) -> Self
@@ -237,11 +237,12 @@ impl<T: Ord> OrderedCollection<T> {
     {
         let mut iter = iter.into_iter();
         let n = iter.len();
-        let mut v = Vec::with_capacity(n);
-        eytzinger_walk(&mut v, &mut iter, 0);
+        let mut v = Vec::with_capacity(n + 1);
+        v.push(Default::default());
+        eytzinger_walk(&mut v, &mut iter, 1);
 
         // it's now safe to set the length, since all `n` elements have been inserted.
-        unsafe { v.set_len(n) };
+        unsafe { v.set_len(n + 1) };
 
         #[cfg(feature = "nightly")]
         {
@@ -270,11 +271,11 @@ impl<T: Ord> OrderedCollection<T> {
     /// # use ordsearch::OrderedCollection;
     /// let mut vals = [42, 89, 7, 12];
     /// let a = OrderedCollection::from_slice(&mut vals);
-    /// assert_eq!(a.find_gte(50), Some(&&89));
+    /// assert_eq!(a.find_gte(50), Some(&89));
     /// ```
-    pub fn from_slice<'a>(v: &'a mut [T]) -> OrderedCollection<&'a T> {
+    pub fn from_slice<'a>(v: &'a mut [T]) -> OrderedCollection<T> {
         v.sort_unstable();
-        OrderedCollection::from_sorted_iter(v.into_iter().map(|x| &*x))
+        OrderedCollection::from_sorted_iter(v.iter().copied())
     }
 
     /// Find the smallest value `v` such that `v >= x`.
@@ -303,7 +304,7 @@ impl<T: Ord> OrderedCollection<T> {
 
         let x = x.borrow();
 
-        let mut i = 0;
+        let mut i = 1;
 
         // this computation is a little finicky, so let's walk through it.
         //
@@ -361,17 +362,17 @@ impl<T: Ord> OrderedCollection<T> {
             let value = unsafe { self.items.get_unchecked(i) }.borrow();
             // using branchless index update. At the moment compiler cannot reliably tranform
             // if expressions to branchless instructions like `cmov` and `setb`
-            i = 2 * i + 1 + usize::from(x > value);
+            i = 2 * i + usize::from(x > value);
         }
 
         // we want ffs(~(i + 1))
         // since ctz(x) = ffs(x) - 1
         // we use ctz(~(i + 1)) + 1
-        let j = (i + 1) >> ((!(i + 1)).trailing_zeros() + 1);
+        let j = i >> (i.trailing_ones() + 1);
         if j == 0 {
             None
         } else {
-            Some(unsafe { self.items.get_unchecked(j - 1) })
+            Some(unsafe { self.items.get_unchecked(j) })
         }
     }
 }
@@ -661,12 +662,12 @@ mod b {
         };
     }
 
-    fn make_this<T: Ord + Copy>(v: &mut Vec<T>) -> OrderedCollection<T> {
+    fn make_this<T: Ord + Copy + Default>(v: &mut Vec<T>) -> OrderedCollection<T> {
         v.sort_unstable();
         OrderedCollection::from_sorted_iter(v.iter().copied())
     }
 
-    fn search_this<T: Ord>(c: &OrderedCollection<T>, x: T) -> Option<&T> {
+    fn search_this<T: Ord + Default + Copy>(c: &OrderedCollection<T>, x: T) -> Option<&T> {
         c.find_gte(x).map(|v| &*v)
     }
 
