@@ -353,7 +353,7 @@ impl<T: Ord + Default + Copy> OrderedCollection<T> {
                 prefetch_read_data(
                     self.items
                         .as_ptr()
-                        .offset(((multiplier * i + offset) & self.mask) as isize),
+                        .offset(((multiplier * i) & self.mask) as isize),
                     3,
                 )
             };
