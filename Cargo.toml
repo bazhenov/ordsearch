@@ -23,3 +23,7 @@ nightly = []
 [badges]
 travis-ci = { repository = "jonhoo/ordsearch" }
 maintenance = { status = "as-is" }
+
+[dependencies]
+rand = "0.8.5"
+rust-pairwise-testing = { path = "/Users/bazhenov/Developer/rust-pairwise-testing" }
