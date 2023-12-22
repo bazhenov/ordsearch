@@ -1,3 +1,5 @@
+#![feature(fn_align)]
+
 //! > NOTE: This crate is generally *slower* than using `Vec::binary_search` over a pre-sorted
 //! > vector, contrary to the claims in the referenced paper, and is mainly presented for
 //! > curiosity's sake at this point.
@@ -117,7 +119,10 @@ extern crate alloc;
 extern crate std;
 
 use alloc::vec::Vec;
-use core::borrow::Borrow;
+use core::{
+    borrow::{Borrow, BorrowMut},
+    mem::{self, size_of},
+};
 
 /// A collection of ordered items that can efficiently satisfy queries for nearby elements.
 ///
@@ -136,7 +141,9 @@ use core::borrow::Borrow;
 /// assert_eq!(x.find_gte(64), Some(&64));
 /// assert_eq!(x.find_gte(65), None);
 /// ```
+// #[repr(align(64))]
 pub struct OrderedCollection<T> {
+    // find_gte_fn: FindGteFn<T>,
     items: Vec<T>,
 }
 
@@ -272,8 +279,8 @@ impl<T: Ord> OrderedCollection<T> {
     /// s.insert(89);
     /// s.insert(7);
     /// s.insert(12);
-    /// let a = OrderedCollection::from_sorted_iter(s.iter());
-    /// assert_eq!(a.find_gte(50), Some(&&89));
+    /// let a = OrderedCollection::from_sorted_iter(s.into_iter());
+    /// assert_eq!(a.find_gte(50), Some(&89));
     /// ```
     ///
     pub fn from_sorted_iter<I>(iter: I) -> Self
@@ -290,7 +297,10 @@ impl<T: Ord> OrderedCollection<T> {
         // it's now safe to set the length, since all `n` elements have been inserted.
         unsafe { items.set_len(n) };
 
-        OrderedCollection { items }
+        OrderedCollection {
+            items,
+            // find_gte_fn: choose_find_gte_fn::<T>(n),
+        }
     }
 
     /// Construct a new `OrderedCollection` from a slice of elements.
@@ -303,7 +313,7 @@ impl<T: Ord> OrderedCollection<T> {
     /// # use ordsearch::OrderedCollection;
     /// let mut vals = [42, 89, 7, 12];
     /// let a = OrderedCollection::from_slice(&mut vals);
-    /// assert_eq!(a.find_gte(50), Some(&&89));
+    /// assert_eq!(a.find_gte(&50), Some(&&89));
     /// ```
     pub fn from_slice(v: &mut [T]) -> OrderedCollection<&T> {
         v.sort_unstable();
@@ -329,33 +339,85 @@ impl<T: Ord> OrderedCollection<T> {
     /// ```
     pub fn find_gte<X>(&self, x: X) -> Option<&T>
     where
-        T: Borrow<X>,
-        X: Ord,
+        X: Ord + Borrow<T>,
     {
-        let x = x.borrow();
-        let mut i = 0;
-        let mask = prefetch_mask(self.items.len());
+        // (self.find_gte_fn)(self, x.borrow())
+        // if self.items.len() >= 32 * 1024 {
+        //     find_gte::<T, true, true>(self, x.borrow())
+        // } else {
+        //     find_gte::<T, false, true>(self, x.borrow())
+        // }
 
-        while i < self.items.len() {
-            let offset = (Self::MULTIPLIER * i + Self::OFFSET) & mask;
-            do_prefetch(self.items.as_ptr().wrapping_add(offset));
+        find_gte::<_, true, true>(self, x.borrow())
 
-            // safe because i < self.items.len()
-            let value = unsafe { self.items.get_unchecked(i) }.borrow();
-            // using branchless index update. At the moment compiler cannot reliably tranform
-            // if expressions to branchless instructions like `cmov` and `setb`
-            i = 2 * i + 1 + usize::from(x > value);
+        // choose_find_gte_fn(self.items.len())(self, x.borrow())
+    }
+}
+
+type FindGteFn<T> = for<'a> fn(&'a OrderedCollection<T>, &T) -> Option<&'a T>;
+
+fn choose_find_gte_fn<T: Ord>(n: usize) -> FindGteFn<T> {
+    let prefetch = n >= 1024 * 32;
+    // let branchless = n > 32 && n < 10 * 1024 * 1024;
+    let prefetch = true;
+    let branchless = true;
+    match (prefetch, branchless) {
+        (true, true) => find_gte::<T, true, true>,
+        (true, false) => find_gte::<T, true, false>,
+        (false, true) => find_gte::<T, false, true>,
+        (false, false) => find_gte::<T, false, false>,
+    }
+}
+
+/// This is a free-standing function that is used to implement `OrderedCollection::find_gte`.
+///
+/// This is done so that we can have specialized versions of the search algorithm for collections of different sizes.
+// #[repr(align(32))]
+// #[inline(never)]
+fn find_gte<'a, T, const PREFETCH: bool, const BRANCHLESS: bool>(
+    collection: &'a OrderedCollection<T>,
+    x: &T,
+) -> Option<&'a T>
+where
+    T: Ord,
+{
+    let mut i = 0;
+    let mask = prefetch_mask(collection.items.len());
+
+    let levels: usize = size_of::<T>().min(3);
+    let mul = 2usize.pow(levels as u32);
+    let mul_off = 2usize.pow(levels as u32) - 1;
+    let cachline_off = 64 / 2 / mem::size_of::<T>();
+
+    while i < collection.items.len() {
+        if PREFETCH {
+            let offset = (mul * i + mul_off + cachline_off) & mask;
+            // let offset =
+            //     (OrderedCollection::<T>::MULTIPLIER * i + OrderedCollection::<T>::OFFSET) & mask;
+            do_prefetch(collection.items.as_ptr().wrapping_add(offset));
         }
 
-        // we want ffs(~(i + 1))
-        // since ctz(x) = ffs(x) - 1
-        // we use ctz(~(i + 1)) + 1
-        let j = (i + 1) >> ((!(i + 1)).trailing_zeros() + 1);
-        if j == 0 {
-            None
-        } else {
-            Some(unsafe { self.items.get_unchecked(j - 1) })
+        // safe because i < collection.items.len()
+        let value = unsafe { collection.items.get_unchecked(i) };
+
+        if !BRANCHLESS {
+            if value == x {
+                return Some(value);
+            }
         }
+        // using branchless index update. At the moment compiler cannot reliably tranform
+        // if expressions to branchless instructions like `cmov` and `setb`
+        i = 2 * i + 1 + usize::from(x > value);
+    }
+
+    // we want ffs(~(i + 1))
+    // since ctz(x) = ffs(x) - 1
+    // we use ctz(~(i + 1)) + 1
+    let j = (i + 1) >> ((!(i + 1)).trailing_zeros() + 1);
+    if j == 0 {
+        None
+    } else {
+        Some(unsafe { collection.items.get_unchecked(j - 1) })
     }
 }
 
