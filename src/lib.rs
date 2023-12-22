@@ -382,16 +382,19 @@ where
     T: Ord,
 {
     let mut i = 0;
-    let mask = prefetch_mask(collection.items.len());
 
-    let levels: usize = size_of::<T>().min(3);
-    let mul = 2usize.pow(levels as u32);
-    let mul_off = 2usize.pow(levels as u32) - 1;
+    let prefetching_enabled = collection.items.len() >= 32768;
+    let mask = prefetch_mask(collection.items.len()); // * usize::from(prefetching_enabled);
+
+    let level: usize = 64;
+    let mut mul = 2usize.pow(level as u32);
+    let mul_off = 2usize.pow(level as u32) - 1;
     let cachline_off = 64 / 2 / mem::size_of::<T>();
 
     while i < collection.items.len() {
         if PREFETCH {
-            let offset = (mul * i + mul_off + cachline_off) & mask;
+            let offset = (mul * i + mul_off + cachline_off).min(collection.items.len() - 1);
+            // assert!(offset == 0, "{}", offset);
             // let offset =
             //     (OrderedCollection::<T>::MULTIPLIER * i + OrderedCollection::<T>::OFFSET) & mask;
             do_prefetch(collection.items.as_ptr().wrapping_add(offset));
