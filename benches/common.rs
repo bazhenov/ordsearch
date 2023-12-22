@@ -3,8 +3,9 @@ use tango_bench::{
     BenchmarkMatrix, Generator, IntoBenchmarks, MeasurementSettings, DEFAULT_SETTINGS,
 };
 
-const SIZES: [usize; 14] = [
-    8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4069, 8192, 16384, 32768, 65536,
+const SIZES: [usize; 19] = [
+    8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4069, 8192, 16384, 32768, 65536, 131072, 262144,
+    524288, 1048576, 10485760,
 ];
 
 struct Lcg(usize);
