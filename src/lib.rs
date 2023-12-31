@@ -226,7 +226,7 @@ impl<T: Ord + Default + Copy> OrderedCollection<T> {
     // a cacheline with any of the other items at that level! that's not great. so, instead, we
     // prefetch the address that is half-way through the set of children. that way, we ensure
     // that we prefetch at least half of the items.
-    const OFFSET: usize = 0;
+    const OFFSET: usize = Self::MULTIPLIER / 2;
 
     /// Construct a new `OrderedCollection` from an iterator over sorted elements.
     ///
@@ -338,9 +338,13 @@ impl<T: Ord + Default + Copy> OrderedCollection<T> {
         let mut i = 1;
         let mask = prefetch_mask(self.items.len());
 
+        let prefetch_pointer = self.items.as_ptr().wrapping_add(Self::OFFSET);
+
         while i < self.items.len() {
-            let offset = (Self::MULTIPLIER * i + Self::OFFSET) & mask;
-            do_prefetch(self.items.as_ptr().wrapping_add(offset));
+            let offset = (Self::MULTIPLIER * i) & mask;
+            // let offset = ((Self::MULTIPLIER * i) + Self::OFFSET) & mask;
+            // let offset = offset * usize::from(offset < self.items.len());
+            do_prefetch(prefetch_pointer.wrapping_add(offset));
 
             // safe because i < self.items.len()
             let value = unsafe { self.items.get_unchecked(i) }.borrow();
