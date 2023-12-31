@@ -33,7 +33,7 @@ criterion_group!(
 
 fn benchmarks_for<T, const MAX: usize>(c: &mut Criterion)
 where
-    T: TryFrom<usize> + Ord + Copy,
+    T: TryFrom<usize> + Ord + Copy + Default,
 {
     let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
 
@@ -216,12 +216,12 @@ fn construction_bench_case<const MAX: usize, T, Coll>(
     });
 }
 
-fn make_this<T: Ord>(mut v: Vec<T>) -> OrderedCollection<T> {
+fn make_this<T: Ord + Default + Copy>(mut v: Vec<T>) -> OrderedCollection<T> {
     v.sort_unstable();
     OrderedCollection::from_sorted_iter(v)
 }
 
-fn search_this<T: Ord>(c: &OrderedCollection<T>, x: T) -> Option<&T> {
+fn search_this<T: Ord + Default + Copy>(c: &OrderedCollection<T>, x: T) -> Option<&T> {
     c.find_gte(x)
 }
 

@@ -7,14 +7,17 @@ use tango_bench::{tango_benchmarks, tango_main};
 
 mod common;
 
-impl<T: Ord> FromSortedVec for OrderedCollection<T> {
+impl<T: Ord + Default + Copy> FromSortedVec for OrderedCollection<T> {
     type Item = T;
     fn from_sorted_vec(v: Vec<T>) -> Self {
         OrderedCollection::from_sorted_iter(v)
     }
 }
 
-fn search_ord<T: Copy + Ord>(haystack: &impl AsRef<OrderedCollection<T>>, needle: &T) -> Option<T> {
+fn search_ord<T: Ord + Default + Copy>(
+    haystack: &impl AsRef<OrderedCollection<T>>,
+    needle: &T,
+) -> Option<T> {
     haystack.as_ref().find_gte(*needle).copied()
 }
 

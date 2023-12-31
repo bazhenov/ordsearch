@@ -140,7 +140,7 @@ pub struct OrderedCollection<T> {
     items: Vec<T>,
 }
 
-impl<T: Ord> From<Vec<T>> for OrderedCollection<T> {
+impl<T: Ord + Default + Copy> From<Vec<T>> for OrderedCollection<T> {
     /// Construct a new `OrderedCollection` from a vector of elements.
     ///
     /// # Examples
@@ -171,7 +171,7 @@ where
     }
 
     // visit left child
-    eytzinger_walk(context, 2 * i + 1);
+    eytzinger_walk(context, 2 * i);
 
     // reborrow context
     let (v, iter) = context;
@@ -185,10 +185,27 @@ where
     }
 
     // visit right child
-    eytzinger_walk(context, 2 * i + 2);
+    eytzinger_walk(context, 2 * i + 1);
 }
 
-impl<T: Ord> OrderedCollection<T> {
+// 2 * (2k + 1) + 1
+// 4k + 2 + 1
+// 4k + 3
+
+// 2k + 1
+// 4k + 3
+// 8k + 7
+//
+// 2^l * k + 2^l - 1
+//
+// u64 elements per cacheline - 8
+// level_prefetch = 2^3
+//
+// u32 elements per cacheline - 16
+// level_prefetch = 2^4
+// 16k + 15
+
+impl<T: Ord + Default + Copy> OrderedCollection<T> {
     // this computation is a little finicky, so let's walk through it.
     //
     // we want to prefetch a couple of levels down in the tree from where we are.
@@ -226,7 +243,7 @@ impl<T: Ord> OrderedCollection<T> {
     // a cacheline with any of the other items at that level! that's not great. so, instead, we
     // prefetch the address that is half-way through the set of children. that way, we ensure
     // that we prefetch at least half of the items.
-    const OFFSET: usize = Self::MULTIPLIER + Self::MULTIPLIER / 2;
+    const OFFSET: usize = 0;
 
     /// Construct a new `OrderedCollection` from an iterator over sorted elements.
     ///
@@ -283,12 +300,13 @@ impl<T: Ord> OrderedCollection<T> {
     {
         let iter = iter.into_iter();
         let n = iter.len();
-        let mut context = (Vec::with_capacity(n), iter);
-        eytzinger_walk(&mut context, 0);
+        let mut context = (Vec::with_capacity(n + 1), iter);
+        context.0.push(T::default());
+        eytzinger_walk(&mut context, 1);
         let (mut items, _) = context;
 
         // it's now safe to set the length, since all `n` elements have been inserted.
-        unsafe { items.set_len(n) };
+        unsafe { items.set_len(n + 1) };
 
         OrderedCollection { items }
     }
@@ -305,9 +323,9 @@ impl<T: Ord> OrderedCollection<T> {
     /// let a = OrderedCollection::from_slice(&mut vals);
     /// assert_eq!(a.find_gte(50), Some(&&89));
     /// ```
-    pub fn from_slice(v: &mut [T]) -> OrderedCollection<&T> {
+    pub fn from_slice(v: &mut [T]) -> OrderedCollection<T> {
         v.sort_unstable();
-        OrderedCollection::from_sorted_iter(v.iter())
+        OrderedCollection::from_sorted_iter(v.iter().copied())
     }
 
     /// Find the smallest value `v` such that `v >= x`.
@@ -333,7 +351,7 @@ impl<T: Ord> OrderedCollection<T> {
         X: Ord,
     {
         let x = x.borrow();
-        let mut i = 0;
+        let mut i = 1;
         let mask = prefetch_mask(self.items.len());
 
         while i < self.items.len() {
@@ -344,18 +362,14 @@ impl<T: Ord> OrderedCollection<T> {
             let value = unsafe { self.items.get_unchecked(i) }.borrow();
             // using branchless index update. At the moment compiler cannot reliably tranform
             // if expressions to branchless instructions like `cmov` and `setb`
-            i = 2 * i + 1 + usize::from(x > value);
+            i = 2 * i + usize::from(x > value);
         }
 
         // we want ffs(~(i + 1))
         // since ctz(x) = ffs(x) - 1
         // we use ctz(~(i + 1)) + 1
-        let j = (i + 1) >> ((!(i + 1)).trailing_zeros() + 1);
-        if j == 0 {
-            None
-        } else {
-            Some(unsafe { self.items.get_unchecked(j - 1) })
-        }
+        i >>= i.trailing_ones() + 1;
+        (i > 0).then(|| unsafe { self.items.get_unchecked(i) })
     }
 }
 
