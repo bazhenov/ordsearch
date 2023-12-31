@@ -188,23 +188,6 @@ where
     eytzinger_walk(context, 2 * i + 1);
 }
 
-// 2 * (2k + 1) + 1
-// 4k + 2 + 1
-// 4k + 3
-
-// 2k + 1
-// 4k + 3
-// 8k + 7
-//
-// 2^l * k + 2^l - 1
-//
-// u64 elements per cacheline - 8
-// level_prefetch = 2^3
-//
-// u32 elements per cacheline - 16
-// level_prefetch = 2^4
-// 16k + 15
-
 impl<T: Ord + Default + Copy> OrderedCollection<T> {
     // this computation is a little finicky, so let's walk through it.
     //
@@ -289,8 +272,8 @@ impl<T: Ord + Default + Copy> OrderedCollection<T> {
     /// s.insert(89);
     /// s.insert(7);
     /// s.insert(12);
-    /// let a = OrderedCollection::from_sorted_iter(s.iter());
-    /// assert_eq!(a.find_gte(50), Some(&&89));
+    /// let a = OrderedCollection::from_sorted_iter(s.iter().copied());
+    /// assert_eq!(a.find_gte(50), Some(&89));
     /// ```
     ///
     pub fn from_sorted_iter<I>(iter: I) -> Self
@@ -300,12 +283,13 @@ impl<T: Ord + Default + Copy> OrderedCollection<T> {
     {
         let iter = iter.into_iter();
         let n = iter.len();
+        // the root element is located in a right slot of the root node, so we need to allocate n + 1 elements
         let mut context = (Vec::with_capacity(n + 1), iter);
         context.0.push(T::default());
         eytzinger_walk(&mut context, 1);
         let (mut items, _) = context;
 
-        // it's now safe to set the length, since all `n` elements have been inserted.
+        // it's now safe to set the length, since all `n` elements have been inserted (do not forget the root node).
         unsafe { items.set_len(n + 1) };
 
         OrderedCollection { items }
@@ -321,7 +305,7 @@ impl<T: Ord + Default + Copy> OrderedCollection<T> {
     /// # use ordsearch::OrderedCollection;
     /// let mut vals = [42, 89, 7, 12];
     /// let a = OrderedCollection::from_slice(&mut vals);
-    /// assert_eq!(a.find_gte(50), Some(&&89));
+    /// assert_eq!(a.find_gte(50), Some(&89));
     /// ```
     pub fn from_slice(v: &mut [T]) -> OrderedCollection<T> {
         v.sort_unstable();
